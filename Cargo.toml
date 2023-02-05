@@ -10,6 +10,7 @@ serde_json = "1.0.91"
 text_analysis = "0.2.1"
 anyhow = "1.0.68"
 derive-visitor = "0.3.0"
+vader_sentiment = "0.1.1"
 
 [dependencies.serde]
 version = "1.0.152"

@@ -1,5 +1,6 @@
+use anyhow::Context;
 use text_analysis::count_words;
-use std::fs::File;
+use std::{fs::File, path::{Path, PathBuf}};
 use std::io::prelude::*;
 use std::collections::{HashMap, HashSet};
 use derive_visitor::{Visitor, Drive};
@@ -8,6 +9,12 @@ use serde::{Serialize, Deserialize};
 
 macro_rules! watch_history {() => (
     format!("{}/watch-history.json", env!("CARGO_MANIFEST_DIR")) // assumes Linux ('/')!
+  )
+}
+
+
+macro_rules! channel_buckets {() => (
+    format!("{}/results.txt", env!("CARGO_MANIFEST_DIR")) // assumes Linux ('/')!
   )
 }
 
@@ -64,11 +71,23 @@ impl YT {
 
 #[derive(Drive)]
 struct History {
-    #[drive(skip)]
-    name: String,
     items: Vec<YTVideo>
 }
 
+#[derive(Default, Debug, Serialize, Deserialize)]
+struct ChannelBuckets(HashMap<String, u32>);
+
+impl ChannelBuckets {
+    pub fn try_from_path<P: AsRef<Path>>(path: &P) -> anyhow::Result<ChannelBuckets> {
+        let mut channels = String::new();
+        let mut file = File::open(path).context("file exits")?;
+        file.read_to_string(&mut channels).context("expect channel file")?;
+
+        Ok(
+            ChannelBuckets(channels.split("/n").map(|c| { (c.into(), 0)}).collect())
+        )
+    }
+}
 
 impl History {
     pub fn get_titles(&self) -> Vec<String> {
@@ -90,21 +109,38 @@ impl History {
     }
 }
 
-#[derive(Visitor, Default, Debug)]
+#[derive(Visitor, Default, Debug, Serialize, Deserialize)]
 #[visitor(YTVideo(enter))]
 struct StatsCollector {
     has_subtitles: u32,
-    videos: u32
+    videos: u32,
+    titles: HashSet<String>,
+    channel_buckets: ChannelBuckets
 }
 
 
 //single pass, collect state while operating on each video
 impl StatsCollector {
+    pub fn new(channel_buckets: ChannelBuckets) -> Self {
+        StatsCollector {
+            has_subtitles: 0,
+            videos: 0,
+            titles: HashSet::new(),
+            channel_buckets
+        }
+    }
     fn enter_yt_video(&mut self, video: &YTVideo) {
         self.videos += 1;
         if video.subtitles.is_some() {
             self.has_subtitles += 1;
+            let subs = video.subtitles.as_ref().unwrap();
+            for sub in subs {
+                let name = &sub.name;
+                let count = self.channel_buckets.0.get(name).unwrap_or(&0);
+                self.channel_buckets.0.insert(name.to_string(), count + 1);
+            }
         }
+        self.titles.insert(String::from(&video.title));
 
         if video.title_url.is_some() {
             //println!("{}", &video.title_url.as_ref().unwrap())
@@ -112,26 +148,30 @@ impl StatsCollector {
     }
 }
 
-// Mutating one map
-fn merge(map1: &mut HashMap<String, u32>, map2: HashMap<String, u32>) {
-    map1.extend(map2);
-}
 fn main() -> anyhow::Result<()> {
     let videos: Vec<YTVideo> = YT::get_watch_history().unwrap();
-    let mut stats = StatsCollector::default();
+    let channel_buckets = ChannelBuckets::try_from_path(&channel_buckets!()).context("bet")?;
+    let mut stats = StatsCollector::new(channel_buckets);
 
     let history = History {
-        name: String::from("ythistory"),
         items: videos
     };
 
     history.drive(&mut stats);
-
-    dbg!(stats);
-    let mut v: Vec<_> = history.get_subtitle_names().into_iter().collect();
-    v.sort();
-    let path = "results.txt";
-    let mut output = File::create(path)?;
-    write!(output, "{}", &v.join("\n"));
+    // Serialize it to a JSON string.
+    let mut v: _ = Vec::from_iter(&stats.channel_buckets.0);
+    v.sort_by(|&(_, a), &(_, b)| b.cmp(a));
+    let top_10 = v[0..400].to_vec();
+    println!("{:#?}", &top_10);
+    //let j = serde_json::to_string(&stats)?;
+    // Print, write to a file, or send to an HTTP server.
+    //println!("{j}");
+    //dbg!(stats);
+    //let mut v: Vec<_> = history.get_subtitle_names().into_iter().collect();
+    //v.sort();
+    //let path = "results.txt";
+    //let mut output = File::create(path)?;
+    //write!(output, "{}", &v.join("\n"))?;
     Ok(())
 }
+
