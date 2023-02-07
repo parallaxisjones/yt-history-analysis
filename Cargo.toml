@@ -11,6 +11,12 @@ text_analysis = "0.2.1"
 anyhow = "1.0.68"
 derive-visitor = "0.3.0"
 vader_sentiment = "0.1.1"
+csv = "1.1.6"
+query-parser = "0.2.0"
+
+[dependencies.chrono]
+version = "0.4.23"
+features = ["serde"]
 
 [dependencies.serde]
 version = "1.0.152"
